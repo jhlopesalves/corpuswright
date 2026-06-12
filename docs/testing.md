@@ -7,7 +7,7 @@ This document outlines the testing strategies and validation commands for the Co
 In order to maintain a fast, reliable, and clean testing environment without risking the leak of private research data, the project strictly separates tests into three categories:
 
 ### 1. Tracked Synthetic Test Fixtures
-- **Location:** `crates/corpusaid-core/tests/fixtures/`
+- **Location:** `crates/corpuswright-core/tests/fixtures/`
 - **Purpose:** Used in automated unit tests (`cargo test`).
 - **Policy:** These files MUST remain tiny, deterministic, and entirely synthetic. They contain concentrated examples of artifacts (fake page numbers, HTML-like tags, Roman numerals) to exhaustively test string cleaning logic without bloating the repository.
 
@@ -29,7 +29,7 @@ Before proposing changes, ensure that all core tests pass and the desktop applic
 
 1. **Test Rust Core Library:**
    ```powershell
-   cargo test --manifest-path crates/corpusaid-core/Cargo.toml
+   cargo test --manifest-path crates/corpuswright-core/Cargo.toml
    ```
 
 2. **Check Tauri App Backend:**

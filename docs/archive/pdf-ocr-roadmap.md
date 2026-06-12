@@ -67,4 +67,4 @@ Phase 4B successfully implemented OCR using a hybrid of **Option 3 and Option 4*
 2. **Bundle Size vs Complexity**: While `pdfium` still requires a `.dll`/`.so` binary sidecar, it is much smaller and easier to manage than a full Tesseract sidecar with hundreds of MBs of `tessdata`.
 3. **UX Alignment**: OCR is strictly opt-in via a UI checkbox ("Use OCR (Experimental)"). If enabled, `extract_pdf` attempts normal embedded text extraction first, and only falls back to rendering and OCRing pages if the embedded text is empty.
 
-This implementation keeps the main `corpusaid-core` crate pure Rust (mostly) while seamlessly supporting legacy, scanned corpora natively without cloud APIs.
+This implementation keeps the main `corpuswright-core` crate pure Rust (mostly) while seamlessly supporting legacy, scanned corpora natively without cloud APIs.

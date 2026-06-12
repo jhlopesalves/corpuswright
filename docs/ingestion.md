@@ -1,7 +1,8 @@
 # Document Ingestion
 
-CorpusWright has a PySide-free ingestion layer in `src/corpusaid/ingestion/`.
-The GUI should stay format-agnostic: it asks ingestion which paths are
+The archived PySide prototype has an ingestion layer in
+`legacy/pyside/src/corpusaid/ingestion/`. The GUI should stay format-agnostic:
+it asks ingestion which paths are
 supported, loads previews through ingestion, and receives extracted plain text
 plus provenance.
 
@@ -83,9 +84,9 @@ include this metadata through the existing export path.
 
 ## Optional Tika Server Fallback
 
-Tika is experimental and disabled by default. CorpusWright only calls a
-user-provided Tika server; it does not vendor binaries, start a jar, require
-Java, or add Tika to `pyproject.toml`.
+Tika is experimental and disabled by default in the archived PySide ingestion
+layer. It only calls a user-provided Tika server; it does not vendor binaries,
+start a jar, require Java, or add Tika to `pyproject.toml`.
 
 Environment variables:
 
@@ -96,8 +97,8 @@ Environment variables:
 
 The fallback sends the source bytes with `PUT`, requests `text/plain`, and uses
 the fallback text only when Tika succeeds and returns non-empty text. If Tika is
-configured but unavailable or fails, CorpusWright records structured warnings and
-continues with the native result.
+configured but unavailable or fails, the archived ingestion layer records
+structured warnings and continues with the native result.
 
 ## DOCX Scope And Limits
 
@@ -186,7 +187,7 @@ overwriting the original package/markup/PDF file.
 
 ## Local Validation
 
-From the repository root:
+From `legacy/pyside`:
 
 ```bash
 python -m pytest -q
