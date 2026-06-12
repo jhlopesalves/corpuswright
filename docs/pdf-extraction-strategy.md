@@ -32,7 +32,7 @@ CorpusWright defaults to `PdfiumFlat` (the standard stream order) or `PdfiumVisu
 ## Supported Extraction Strategies
 
 ### `PdfiumFlat` (Default)
-Extracts characters in the raw stream order reported by PDFium. This matches the behavior of standard viewers and is the safest, most stable default choice.
+Extracts characters in the raw stream order reported by PDFium. This matches the behaviour of standard viewers and is the safest, most stable default choice.
 
 ### `PdfiumVisualSingleColumn` (Recommended for prose and code blocks)
 Reconstructs lines visually:
@@ -131,7 +131,7 @@ To clean up artefacts specific to PDF documents (such as running headers, footer
 ## Pipeline Integration
 
 - **Original Text tab:** Shows default PDF extraction without optional cleanup.
-- **Processed Text tab & Export:** Applies PDF cleanup options (if enabled) first on the page/line representation, followed by general text-cleaning operations (lowercase, unicode normalization, diacritics replacement, etc.).
+- **Processed Text tab & Export:** Applies PDF cleanup options (if enabled) first on the page/line representation, followed by general text-cleaning operations (lowercase, unicode normalisation, diacritics replacement, etc.).
 - **Search:** Uses the active extraction and cleanup settings configured in `CleaningConfig` for consistency.
 - **Word Count Command:** Does not have config context in the Tauri command API and defaults to the safe fallback strategy (`PdfiumFlat` with cleanup disabled).
 
