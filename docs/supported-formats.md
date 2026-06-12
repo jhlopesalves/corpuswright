@@ -1,6 +1,6 @@
 # Supported Formats
 
-CorpusAid currently supports the extraction of plain text from the following document formats:
+CorpusWright currently supports the extraction of plain text from the following document formats:
 
 - `txt` (Plain Text)
 - `html` / `htm` (Hypertext Markup Language)
@@ -9,9 +9,9 @@ CorpusAid currently supports the extraction of plain text from the following doc
 
 ## Extraction Methods
 
-CorpusAid does not modify original source files. Extraction is a read-only process, decoupled from text cleaning. The exact method used depends on the format.
+CorpusWright does not modify original source files. Extraction is a read-only process, decoupled from text cleaning. The exact method used depends on the format.
 
-By default, CorpusAid uses required format readers where necessary, but optional extraction and cleanup transformations are disabled. Users must explicitly enable options such as HTML text extraction, line cleanup, Unicode normalisation, PDF cleanup, OCR, or custom removals before export.
+By default, CorpusWright uses required format readers where necessary, but optional extraction and cleanup transformations are disabled. Users must explicitly enable options such as HTML text extraction, line cleanup, Unicode normalisation, PDF cleanup, OCR, or custom removals before export.
 
 The exact method used depends on the format:
 
@@ -30,7 +30,7 @@ The exact method used depends on the format:
 ### PDF
 - **Experimental**: Support for PDF is experimental.
 - **Reading Order**: The reading order of extracted text is not guaranteed, as PDF layouts define elements by coordinates rather than a structured text flow. Formatting may be lost.
-- **Scanned Documents**: By default, CorpusAid extracts embedded selectable text. If the user opts-in by checking "Use OCR (Experimental)", CorpusAid will detect when a PDF has no embedded text (i.e., it's a scanned/image-only document) and automatically rasterise the pages to run Optical Character Recognition (OCR) locally. This is significantly slower and the results are probabilistic, but it prevents empty extractions for image-only PDFs.
+- **Scanned Documents**: By default, CorpusWright extracts embedded selectable text. If the user opts-in by checking "Use OCR (Experimental)", CorpusWright will detect when a PDF has no embedded text (i.e., it's a scanned/image-only document) and automatically rasterise the pages to run Optical Character Recognition (OCR) locally. This is significantly slower and the results are probabilistic, but it prevents empty extractions for image-only PDFs.
 - **Encrypted PDFs**: Password-protected or encrypted PDFs are not supported and may result in an extraction error or garbage text.
 
 ### General

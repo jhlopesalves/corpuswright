@@ -1,6 +1,6 @@
 # Repeated Artefact Finder
 
-The **Repeated Artefact Finder** is a corpus-wide diagnostic tool in CorpusAid designed to surface repetitive text lines and blocks (such as headers, footers, copyright boilerplate, extraction artifacts, and symbol-heavy noise) across your documents.
+The **Repeated Artefact Finder** is a corpus-wide diagnostic tool in CorpusWright designed to surface repetitive text lines and blocks (such as headers, footers, copyright boilerplate, extraction artifacts, and symbol-heavy noise) across your documents.
 
 > **v1 is diagnostic only.** This tool helps you *identify* potential artifacts so you can make informed decisions.
 > - It does **not** modify any files.

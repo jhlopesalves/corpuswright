@@ -1,6 +1,6 @@
 # corpusaid-core
 
-`corpusaid-core` is the Rust backend spike for CorpusAid 2. It provides core functionality for corpus compilation and text processing in a UI-agnostic manner, ready to be integrated with Tauri.
+`corpusaid-core` is the Rust backend spike for CorpusWright. It provides core functionality for corpus compilation and text processing in a UI-agnostic manner, ready to be integrated with Tauri.
 
 ## Supported Formats
 

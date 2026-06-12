@@ -1,6 +1,6 @@
 # PDF Extraction Strategy
 
-This document explains the technical challenges of born-digital PDF text extraction and details the architectural decisions implemented in CorpusAid.
+This document explains the technical challenges of born-digital PDF text extraction and details the architectural decisions implemented in CorpusWright.
 
 ---
 
@@ -68,7 +68,7 @@ To avoid thread contention, the lock is acquired **only** during FFI calls (load
 
 ## Optional PDF Cleanup Strategy
 
-To clean up artifacts specific to PDF documents (such as running headers, footers, and page numbers/labels) without modifying the original source files, CorpusAid provides optional, deterministic, page-aware PDF post-extraction cleanup options.
+To clean up artifacts specific to PDF documents (such as running headers, footers, and page numbers/labels) without modifying the original source files, CorpusWright provides optional, deterministic, page-aware PDF post-extraction cleanup options.
 
 ### 1. Repeated Header/Footer Removal (`remove_repeated_pdf_headers_footers`)
 

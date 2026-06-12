@@ -1,6 +1,6 @@
 # Phase 4B: PDF OCR Roadmap
 
-This document outlines the feasibility, architecture options, and recommendations for implementing Optical Character Recognition (OCR) for scanned/image-only PDFs in CorpusAid Phase 4B.
+This document outlines the feasibility, architecture options, and recommendations for implementing Optical Character Recognition (OCR) for scanned/image-only PDFs in CorpusWright Phase 4B.
 
 ## Objective
 To allow researchers to seamlessly extract text from scanned, non-embedded PDF files without relying on external cloud APIs, ensuring local-first privacy.

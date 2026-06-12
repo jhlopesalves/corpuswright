@@ -1,6 +1,6 @@
 # Document Ingestion
 
-CorpusAid has a PySide-free ingestion layer in `src/corpusaid/ingestion/`.
+CorpusWright has a PySide-free ingestion layer in `src/corpusaid/ingestion/`.
 The GUI should stay format-agnostic: it asks ingestion which paths are
 supported, loads previews through ingestion, and receives extracted plain text
 plus provenance.
@@ -83,7 +83,7 @@ include this metadata through the existing export path.
 
 ## Optional Tika Server Fallback
 
-Tika is experimental and disabled by default. CorpusAid only calls a
+Tika is experimental and disabled by default. CorpusWright only calls a
 user-provided Tika server; it does not vendor binaries, start a jar, require
 Java, or add Tika to `pyproject.toml`.
 
@@ -96,7 +96,7 @@ Environment variables:
 
 The fallback sends the source bytes with `PUT`, requests `text/plain`, and uses
 the fallback text only when Tika succeeds and returns non-empty text. If Tika is
-configured but unavailable or fails, CorpusAid records structured warnings and
+configured but unavailable or fails, CorpusWright records structured warnings and
 continues with the native result.
 
 ## DOCX Scope And Limits

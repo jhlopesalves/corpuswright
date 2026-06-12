@@ -1,6 +1,6 @@
-# CorpusAid Testing Policy
+# CorpusWright Testing Policy
 
-This document outlines the testing strategies and validation commands for the CorpusAid Rust/Tauri architecture.
+This document outlines the testing strategies and validation commands for the CorpusWright Rust/Tauri architecture.
 
 ## Testing Artifacts and Corpora Separation
 
@@ -13,7 +13,7 @@ In order to maintain a fast, reliable, and clean testing environment without ris
 
 ### 2. Small Public Demo Corpus
 - **Location:** `examples/corpora/public-domain-demo/`
-- **Purpose:** A safe, public-domain corpus tracked in Git that contributors and users can manually load into the CorpusAid desktop application to experiment with parameters.
+- **Purpose:** A safe, public-domain corpus tracked in Git that contributors and users can manually load into the CorpusWright desktop application to experiment with parameters.
 - **Policy:** This corpus is strictly composed of synthetic random text or completely verifiable public domain text. No copyrighted material or large files should ever be placed here.
 
 ### 3. Ignored Local Corpora

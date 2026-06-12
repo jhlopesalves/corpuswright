@@ -1,6 +1,6 @@
 # Public Domain Demo Corpus
 
-This corpus is a completely synthetic set of files created strictly for testing and demonstrating CorpusAid's cleaning parameters.
+This corpus is a completely synthetic set of files created strictly for testing and demonstrating CorpusWright's cleaning parameters.
 
 **License**: Public Domain (CC0)
 **Source**: Synthetically generated random text and formatting artifacts.
