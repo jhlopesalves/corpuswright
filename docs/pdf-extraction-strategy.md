@@ -61,7 +61,7 @@ This example will run all strategies and print a markdown comparison table. It w
 
 ## Thread Safety
 
-PDFium is **not thread-safe**. Because Rayon processes files in parallel, all PDFium FFI calls are synchronized using a global static `PDFIUM_LOCK` mutex. 
+PDFium is **not thread-safe**. Because Rayon processes files in parallel, all PDFium FFI calls are synchronised using a global static `PDFIUM_LOCK` mutex.
 To avoid thread contention, the lock is acquired **only** during FFI calls (loading document, retrieving pages, and collecting character arrays). Layout sorting, spacing reconstruction, diacritics cleaning, and quality evaluation are executed outside the lock.
 
 ---
@@ -73,16 +73,16 @@ To clean up artefacts specific to PDF documents (such as running headers, footer
 ### 1. Repeated Header/Footer Removal (`remove_repeated_pdf_headers_footers`)
 
 - **Algorithm:**
-   1. For each page in the PDF (or the subset of pages extracted under character limits), candidate lines are collected from the top 3 lines and the bottom 3 lines.
-  2. Candidate lines are normalized for matching by:
+  1. For each page in the PDF (or the subset of pages extracted under character limits), candidate lines are collected from the top 3 lines and the bottom 3 lines.
+  2. Candidate lines are normalised for matching by:
      - Trimming whitespace;
      - Stripping surrounding punctuation (hyphens, dashes, brackets, parentheses, dots, commas, asterisks, slashes, etc.) at the start/end;
      - Collapsing internal spaces;
      - Converting to lowercase;
      - Replacing all digit runs with a placeholder (`#`).
-  3. Unique normalized lines per page are counted across pages.
-   4. If a normalized candidate pattern appears on at least 3 pages and in at least 50% of all pages, it is marked as a repeated header/footer pattern.
-   5. The matching lines are removed only from the top/bottom zones (the top 3 and bottom 3 lines) of the pages. Body text remains untouched.
+  3. Unique normalised lines per page are counted across pages.
+  4. If a normalised candidate pattern appears on at least 3 pages and in at least 50% of all pages, it is marked as a repeated header/footer pattern.
+  5. The matching lines are removed only from the top/bottom zones (the top 3 and bottom 3 lines) of the pages. Body text remains untouched.
   6. A descriptive warning is logged detailing how many pages had headers/footers removed and the specific patterns matched.
 
 - **Limitations:**
@@ -93,29 +93,29 @@ To clean up artefacts specific to PDF documents (such as running headers, footer
 ### 2. Page Label Removal (`remove_pdf_page_labels`)
 
 - **Algorithm:**
-   - Standard page label patterns are matched inside the top 3 and bottom 3 lines of pages.
-  - Page labels include:
-    - Pure Arabic numbers (e.g., `12`, `104`);
-    - Standard prefixes (e.g., `Page 12`, `p. 12`);
-    - Bracketed or dashed forms (e.g., `- 12 -`, `— 12 —`);
-    - Slashes and "of" ranges (e.g., `12 / 40`, `Page 12 of 40`);
-    - Roman numeral page labels (e.g., `i`, `iv`, `xii`, `Page iv`) verified against a standard Roman numeral grammar.
-  - Matches are removed only from the top/bottom zones.
-  - Numbers embedded inside normal prose (e.g., "Chapter 12. Introduction") are safely preserved.
+  1. Standard page label patterns are matched inside the top 3 and bottom 3 lines of pages.
+  2. Page labels include:
+     - Pure Arabic numbers (e.g., `12`, `104`);
+     - Standard prefixes (e.g., `Page 12`, `p. 12`);
+     - Bracketed or dashed forms (e.g., `- 12 -`, `— 12 —`);
+     - Slashes and "of" ranges (e.g., `12 / 40`, `Page 12 of 40`);
+     - Roman numeral page labels (e.g., `i`, `iv`, `xii`, `Page iv`) verified against a standard Roman numeral grammar.
+  3. Matches are removed only from the top/bottom zones.
+  4. Numbers embedded inside normal prose (e.g., "Chapter 12. Introduction") are safely preserved.
 
 ### 3. Symbol-Heavy Graphical Noise Removal (`remove_pdf_symbol_heavy_artifacts`)
 
 - **Algorithm:**
-  1. For each page, every extracted line is analyzed and scored.
-   2. A line is marked as a removable symbol-heavy graphical artefact if it consists entirely of graphical markers and whitespace (regardless of length), OR if all of the following basic thresholds are met:
-      - **Trimmed Length:** The trimmed character length of the line is at least 7. This avoids removing short legitimate text labels.
-      - **Symbol/Punctuation Ratio:** The ratio of non-alphanumeric characters (symbols/punctuation) to total non-whitespace characters in the line is at least 0.70.
-      - **Alphabetic Ratio:** The ratio of alphabetic characters to total non-whitespace characters is at most 0.20.
-      - **Low Word-Like Token Count:** The count of "word-like" tokens (tokens containing at least one letter or digit) is at most 1.
-   3. In addition to the basic thresholds, the line must satisfy at least one of the following repeated-marker conditions:
-      - Contains at least 5 graphical marker glyphs (such as `●`, `•`, `·`, `○`, `■`, `□`, `▲`, `△`, `◆`, `◇`).
-      - Contains one specific symbol/punctuation character dominating at least 70% of the non-whitespace content.
-      - Contains an obvious repeated symbol run of at least 4 identical non-alphanumeric characters (whitespace-collapsed, e.g. `● ● ● ●`, `---------`, `********`).
+  1. For each page, every extracted line is analysed and scored.
+  2. A line is marked as a removable symbol-heavy graphical artefact if it consists entirely of graphical markers and whitespace (regardless of length), OR if all of the following basic thresholds are met:
+     - **Trimmed Length:** The trimmed character length of the line is at least 7. This avoids removing short legitimate text labels.
+     - **Symbol/Punctuation Ratio:** The ratio of non-alphanumeric characters (symbols/punctuation) to total non-whitespace characters in the line is at least 0.70.
+     - **Alphabetic Ratio:** The ratio of alphabetic characters to total non-whitespace characters is at most 0.20.
+     - **Low Word-Like Token Count:** The count of "word-like" tokens (tokens containing at least one letter or digit) is at most 1.
+  3. In addition to the basic thresholds, the line must satisfy at least one of the following repeated-marker conditions:
+     - Contains at least 5 graphical marker glyphs (such as `●`, `•`, `·`, `○`, `■`, `□`, `▲`, `△`, `◆`, `◇`).
+     - Contains one specific symbol/punctuation character dominating at least 70% of the non-whitespace content.
+     - Contains an obvious repeated symbol run of at least 4 identical non-alphanumeric characters (whitespace-collapsed, e.g. `● ● ● ●`, `---------`, `********`).
   4. Consecutive removed lines are grouped/folded into a single "artefact block" per page to keep logs and statistics concise.
   5. Descriptive warnings are generated:
      - If removals occurred on only one page: `"Removed X symbol-heavy PDF graphical artefact lines (folded into Y blocks) from page Z."`
