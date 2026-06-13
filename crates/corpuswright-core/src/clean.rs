@@ -64,8 +64,8 @@ pub struct CleaningConfig {
     pub remove_patterns: Vec<String>,
     pub replace_patterns: Vec<ReplacementRule>,
     /// PDF extraction strategy.
-    /// This controls how raw PDF text is reconstructed from the character stream,
-    /// not a text-cleaning or sanitisation transformation.
+    /// NOTE: This is an extraction-layer option specifying how raw PDF text
+    /// is reconstructed from the character stream, NOT a text-cleaning/sanitization transformation.
     #[serde(default)]
     pub pdf_embedded_text_strategy: PdfEmbeddedTextStrategy,
     /// PDF-specific post-extraction cleanup option to remove repeated headers and footers across pages.

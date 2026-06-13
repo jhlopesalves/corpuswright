@@ -42,7 +42,7 @@ pub struct RepeatedArtifactScanConfig {
     pub include_text_dominant: bool,
     /// Include candidates with a mix of text and numbers (e.g. "Page 12", "Chapter 5").
     pub include_mixed_text_numbers: bool,
-    /// Include numeric-dominant candidates, which may group unrelated statistical output.
+    /// Include numeric-dominant candidates (risky — may group unrelated statistical output).
     pub include_numeric_dominant: bool,
     /// Include symbol/noise-dominant candidates (extraction junk markers).
     pub include_symbol_noise: bool,
