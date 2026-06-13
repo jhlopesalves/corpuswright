@@ -1,0 +1,1499 @@
+diff --git a/apps/desktop/index.html b/apps/desktop/index.html
+index c006613..ec97f7a 100644
+--- a/apps/desktop/index.html
++++ b/apps/desktop/index.html
+@@ -203,11 +203,19 @@
+           <label class="pdf-intake-profile" for="pdf-intake-ocr">
+             <input type="radio" id="pdf-intake-ocr" name="pdf-intake-profile" value="ocr" />
+             <span>
+-              <span class="pdf-intake-profile-title">Scanned / OCR rescue PDF</span>
++              <span class="pdf-intake-profile-title">OCR rescue PDF</span>
+               <span class="pdf-intake-profile-help">Attempts OCR for scanned or image-based PDFs. Slower, and recognition
+                 errors are possible.</span>
+             </span>
+           </label>
++
++          <label class="pdf-intake-profile" for="pdf-intake-force-ocr">
++            <input type="radio" id="pdf-intake-force-ocr" name="pdf-intake-profile" value="force-ocr" />
++            <span>
++              <span class="pdf-intake-profile-title">Force OCR (slow)</span>
++              <span class="pdf-intake-profile-help">Ignores embedded PDF text and OCRs rendered pages at high quality.</span>
++            </span>
++          </label>
+         </div>
+ 
+         <div id="pdf-intake-audit-panel" class="pdf-intake-audit-panel hidden">
+@@ -317,11 +325,27 @@
+                 <select id="sel-pdf-text-source" class="settings-select"
+                   style="width: 100%; padding: 6px; border-radius: 4px; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-color);">
+                   <option value="EmbeddedText">Embedded text</option>
+-                  <option value="Ocr">OCR</option>
++                  <option value="Ocr">OCR rescue</option>
++                  <option value="ForceOcr">Force OCR (slow)</option>
++                </select>
++                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 6px 0 0 0;">
++                  Embedded text is fastest. OCR rescue only OCRs when embedded text looks empty or poor. Force OCR
++                  ignores embedded text and can be much slower.
++                </p>
++              </div>
++            </details>
++
++            <details open>
++              <summary>PDF OCR Quality</summary>
++              <div style="padding-left: 0; margin-top: 4px;">
++                <select id="sel-pdf-ocr-quality" class="settings-select"
++                  style="width: 100%; padding: 6px; border-radius: 4px; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-color);">
++                  <option value="Fast">Fast</option>
++                  <option value="Balanced">Balanced</option>
++                  <option value="HighQuality">High quality</option>
+                 </select>
+                 <p style="font-size: 0.85rem; color: var(--text-muted); margin: 6px 0 0 0;">
+-                  Embedded text is faster and best for born-digital PDFs. OCR is slower and intended for
+-                  scanned/image-based PDFs.
++                  Higher quality renders larger page images for OCR and may take much longer on scanned PDFs.
+                 </p>
+               </div>
+             </details>
+diff --git a/apps/desktop/src-tauri/src/lib.rs b/apps/desktop/src-tauri/src/lib.rs
+index bfb82d5..ccb738f 100644
+--- a/apps/desktop/src-tauri/src/lib.rs
++++ b/apps/desktop/src-tauri/src/lib.rs
+@@ -95,6 +95,13 @@ struct ExportProgress {
+     current_file: String,
+ }
+ 
++#[derive(Clone, Serialize)]
++#[serde(rename_all = "camelCase")]
++struct WordCountBatchResult {
++    total_words: u64,
++    skipped_ocr_mode: bool,
++}
++
+ #[tauri::command(async)]
+ fn scan_directory_command(
+     path: String,
+@@ -277,19 +284,23 @@ fn compute_word_count_command(
+     corpus: tauri::State<'_, CorpusState>,
+     cleaning_config: CleaningConfig,
+     cache: tauri::State<'_, ExtractionCache>,
+-) -> Result<u64, String> {
++) -> Result<WordCountBatchResult, String> {
+     let records = corpus.records_for_indices(&indices, corpus_version)?;
+-    let total_words: u64 = records
+-        .iter()
+-        .map(|record| {
+-            corpuswright_core::word_count::count_words_for_record(
+-                record,
+-                &cleaning_config,
+-                Some(&*cache),
+-            ) as u64
+-        })
+-        .sum();
+-    Ok(total_words)
++    let mut total_words = 0;
++    let mut skipped_ocr_mode = false;
++    for record in &records {
++        let outcome = corpuswright_core::word_count::count_words_for_record(
++            record,
++            &cleaning_config,
++            Some(&*cache),
++        );
++        total_words += outcome.count as u64;
++        skipped_ocr_mode |= outcome.skipped_ocr_mode;
++    }
++    Ok(WordCountBatchResult {
++        total_words,
++        skipped_ocr_mode,
++    })
+ }
+ 
+ #[tauri::command(async)]
+diff --git a/apps/desktop/src/config.ts b/apps/desktop/src/config.ts
+index a2870f5..83a2ed6 100644
+--- a/apps/desktop/src/config.ts
++++ b/apps/desktop/src/config.ts
+@@ -1,6 +1,7 @@
+ import type {
+   CleaningConfig,
+   PdfEmbeddedTextStrategy,
++  PdfOcrQuality,
+   PdfTextSource,
+   TableExtractionStrategy,
+ } from "./generated/CleaningConfig.js";
+@@ -44,7 +45,9 @@ export const ALLOWED_PDF_EMBEDDED_TEXT_STRATEGIES = [
+   "PdfiumVisualColumnsExperimental",
+ ] as const;
+ 
+-export const ALLOWED_PDF_TEXT_SOURCES = ["EmbeddedText", "Ocr"] as const;
++export const ALLOWED_PDF_TEXT_SOURCES = ["EmbeddedText", "Ocr", "ForceOcr"] as const;
++
++export const ALLOWED_PDF_OCR_QUALITIES = ["Fast", "Balanced", "HighQuality"] as const;
+ 
+ export function createDefaultCleaningConfig(): CleaningConfig {
+   return {
+@@ -71,6 +74,7 @@ export function createDefaultCleaningConfig(): CleaningConfig {
+     remove_patterns: [],
+     replace_patterns: [],
+     pdf_text_source: "EmbeddedText",
++    pdf_ocr_quality: "Balanced",
+     pdf_embedded_text_strategy: "PdfiumFlat",
+     remove_repeated_pdf_headers_footers: false,
+     remove_pdf_page_labels: false,
+@@ -87,6 +91,13 @@ export function isPdfTextSource(value: unknown): value is PdfTextSource {
+   );
+ }
+ 
++export function isPdfOcrQuality(value: unknown): value is PdfOcrQuality {
++  return (
++    typeof value === "string" &&
++    (ALLOWED_PDF_OCR_QUALITIES as readonly string[]).includes(value)
++  );
++}
++
+ export function isPdfEmbeddedTextStrategy(value: unknown): value is PdfEmbeddedTextStrategy {
+   return (
+     typeof value === "string" &&
+@@ -123,6 +134,10 @@ export function normaliseCleaningConfig(raw: unknown): CleaningConfig {
+     config.pdf_text_source = obj.pdf_text_source;
+   }
+ 
++  if (isPdfOcrQuality(obj.pdf_ocr_quality)) {
++    config.pdf_ocr_quality = obj.pdf_ocr_quality;
++  }
++
+   if (Array.isArray(obj.remove_patterns) && obj.remove_patterns.every((p: unknown) => typeof p === "string")) {
+     config.remove_patterns = [...obj.remove_patterns];
+   }
+diff --git a/apps/desktop/src/corpus.ts b/apps/desktop/src/corpus.ts
+index 11a8437..3f43292 100644
+--- a/apps/desktop/src/corpus.ts
++++ b/apps/desktop/src/corpus.ts
+@@ -18,7 +18,7 @@ let callbacks: CorpusCallbacks = {
+   updateWordCount: () => {},
+ };
+ 
+-type PdfIntakeProfileId = "standard" | "layout" | "ocr";
++type PdfIntakeProfileId = "standard" | "layout" | "ocr" | "force-ocr";
+ type PdfAuditSeverity = PdfAuditSuggestedProfile;
+ 
+ interface PdfIntakeProfile {
+@@ -31,6 +31,7 @@ const pdfIntakeProfiles: Record<PdfIntakeProfileId, PdfIntakeProfile> = {
+     statusLabel: "standard embedded-text profile",
+     apply: (config) => {
+       config.pdf_text_source = "EmbeddedText";
++      config.pdf_ocr_quality = "Balanced";
+       config.pdf_embedded_text_strategy = "PdfiumFlat";
+       config.remove_repeated_pdf_headers_footers = false;
+       config.remove_pdf_page_labels = false;
+@@ -43,6 +44,7 @@ const pdfIntakeProfiles: Record<PdfIntakeProfileId, PdfIntakeProfile> = {
+     statusLabel: "layout-heavy profile",
+     apply: (config) => {
+       config.pdf_text_source = "EmbeddedText";
++      config.pdf_ocr_quality = "Balanced";
+       config.pdf_embedded_text_strategy = "PdfiumVisualSingleColumn";
+       config.remove_repeated_pdf_headers_footers = true;
+       config.remove_pdf_page_labels = true;
+@@ -55,6 +57,20 @@ const pdfIntakeProfiles: Record<PdfIntakeProfileId, PdfIntakeProfile> = {
+     statusLabel: "scanned/OCR rescue profile",
+     apply: (config) => {
+       config.pdf_text_source = "Ocr";
++      config.pdf_ocr_quality = "Balanced";
++      config.pdf_embedded_text_strategy = "PdfiumFlat";
++      config.remove_repeated_pdf_headers_footers = true;
++      config.remove_pdf_page_labels = true;
++      config.remove_pdf_symbol_heavy_artifacts = false;
++      config.remove_pdf_code_like_blocks = false;
++      config.remove_pdf_formula_like_lines = false;
++    },
++  },
++  "force-ocr": {
++    statusLabel: "force OCR/high-quality profile",
++    apply: (config) => {
++      config.pdf_text_source = "ForceOcr";
++      config.pdf_ocr_quality = "HighQuality";
+       config.pdf_embedded_text_strategy = "PdfiumFlat";
+       config.remove_repeated_pdf_headers_footers = true;
+       config.remove_pdf_page_labels = true;
+@@ -69,12 +85,14 @@ const auditProfileToIntakeProfile: Record<PdfAuditSuggestedProfile, PdfIntakePro
+   standard: "standard",
+   layout_heavy: "layout",
+   ocr_rescue: "ocr",
++  force_ocr: "force-ocr",
+ };
+ 
+ const profileDisplayNames: Record<PdfIntakeProfileId, string> = {
+   standard: "Standard",
+   layout: "Layout-heavy",
+   ocr: "OCR rescue",
++  "force-ocr": "Force OCR",
+ };
+ 
+ let pdfIntakeSelectedPaths: string[] = [];
+@@ -93,7 +111,7 @@ function clearStateForLoad(): void {
+ 
+ function selectedPdfIntakeProfileId(): PdfIntakeProfileId {
+   const selected = document.querySelector<HTMLInputElement>('input[name="pdf-intake-profile"]:checked');
+-  if (selected?.value === "layout" || selected?.value === "ocr") {
++  if (selected?.value === "layout" || selected?.value === "ocr" || selected?.value === "force-ocr") {
+     return selected.value;
+   }
+   return "standard";
+@@ -235,7 +253,9 @@ function renderPdfAuditLoading(fileCount: number): void {
+ function batchSuggestedProfile(results: PdfAuditResult[]): PdfIntakeProfileId {
+   let strongest: PdfAuditSeverity = "standard";
+   for (const result of results) {
+-    if (result.suggested_profile === "ocr_rescue") {
++    if (result.suggested_profile === "force_ocr") {
++      strongest = "force_ocr";
++    } else if (result.suggested_profile === "ocr_rescue" && strongest !== "force_ocr") {
+       strongest = "ocr_rescue";
+     } else if (result.suggested_profile === "layout_heavy" && strongest === "standard") {
+       strongest = "layout_heavy";
+diff --git a/apps/desktop/src/dom.ts b/apps/desktop/src/dom.ts
+index 94705c8..d2fff4b 100644
+--- a/apps/desktop/src/dom.ts
++++ b/apps/desktop/src/dom.ts
+@@ -33,6 +33,7 @@ export const dom = {
+   chkExtractHtml: getElement<HTMLInputElement>("chk-extract-html"),
+   selTableExtraction: getElement<HTMLSelectElement>("sel-table-extraction"),
+   selPdfTextSource: getElement<HTMLSelectElement>("sel-pdf-text-source"),
++  selPdfOcrQuality: getElement<HTMLSelectElement>("sel-pdf-ocr-quality"),
+   selPdfEmbeddedTextStrategy: getElement<HTMLSelectElement>("sel-pdf-embedded-text-strategy"),
+   chkRemoveHeaders: getElement<HTMLInputElement>("chk-remove-headers"),
+   chkRemoveFooters: getElement<HTMLInputElement>("chk-remove-footers"),
+diff --git a/apps/desktop/src/generated/CleaningConfig.ts b/apps/desktop/src/generated/CleaningConfig.ts
+index f1d108e..399c231 100644
+--- a/apps/desktop/src/generated/CleaningConfig.ts
++++ b/apps/desktop/src/generated/CleaningConfig.ts
+@@ -2,14 +2,19 @@ import type { ReplacementRule } from "./ReplacementRule.js";
+ import type { TableExtractionStrategy } from "./TableExtractionStrategy.js";
+ import type { PdfEmbeddedTextStrategy } from "./PdfEmbeddedTextStrategy.js";
+ import type { PdfTextSource } from "./PdfTextSource.js";
++import type { PdfOcrQuality } from "./PdfOcrQuality.js";
+ 
+-export type { ReplacementRule, TableExtractionStrategy, PdfEmbeddedTextStrategy, PdfTextSource };
++export type { ReplacementRule, TableExtractionStrategy, PdfEmbeddedTextStrategy, PdfTextSource, PdfOcrQuality };
+ 
+ export type CleaningConfig = { join_line_breaks: boolean, normalize_irregular_line_breaks: boolean, remove_standalone_page_numbers: boolean, remove_standalone_roman_page_numbers: boolean, remove_page_indicators: boolean, remove_page_delimiters: boolean, lowercase: boolean, trim_lines: boolean, collapse_blank_lines: boolean, normalize_line_endings: boolean, normalize_unicode: boolean, replace_diacritics: boolean, extract_html: boolean, table_extraction_strategy: TableExtractionStrategy, remove_headers: boolean, remove_footers: boolean, remove_footnotes: boolean, remove_endnotes: boolean, remove_comments: boolean, remove_table_of_contents: boolean, remove_patterns: Array<string>, replace_patterns: Array<ReplacementRule>,
+ /**
+  * PDF text source used before normal text cleaning is applied.
+  */
+ pdf_text_source: PdfTextSource,
++/**
++ * OCR render quality used when PDF OCR runs.
++ */
++pdf_ocr_quality: PdfOcrQuality,
+ /**
+  * PDF extraction strategy.
+  * NOTE: This is an extraction-layer option specifying how raw PDF text
+diff --git a/apps/desktop/src/generated/PdfAuditSuggestedProfile.ts b/apps/desktop/src/generated/PdfAuditSuggestedProfile.ts
+index 70f5682..9809fa7 100644
+--- a/apps/desktop/src/generated/PdfAuditSuggestedProfile.ts
++++ b/apps/desktop/src/generated/PdfAuditSuggestedProfile.ts
+@@ -1 +1 @@
+-export type PdfAuditSuggestedProfile = "standard" | "layout_heavy" | "ocr_rescue";
++export type PdfAuditSuggestedProfile = "standard" | "layout_heavy" | "ocr_rescue" | "force_ocr";
+diff --git a/apps/desktop/src/generated/PdfTextSource.ts b/apps/desktop/src/generated/PdfTextSource.ts
+index ff300b8..51a83d6 100644
+--- a/apps/desktop/src/generated/PdfTextSource.ts
++++ b/apps/desktop/src/generated/PdfTextSource.ts
+@@ -1 +1 @@
+-export type PdfTextSource = "EmbeddedText" | "Ocr";
++export type PdfTextSource = "EmbeddedText" | "Ocr" | "ForceOcr";
+diff --git a/apps/desktop/src/settings-modal.ts b/apps/desktop/src/settings-modal.ts
+index 44d24ec..f53277f 100644
+--- a/apps/desktop/src/settings-modal.ts
++++ b/apps/desktop/src/settings-modal.ts
+@@ -12,6 +12,7 @@ import { state } from "./state";
+ import type {
+   CleaningConfig,
+   PdfEmbeddedTextStrategy,
++  PdfOcrQuality,
+   PdfTextSource,
+   TableExtractionStrategy,
+ } from "./generated/CleaningConfig.js";
+@@ -77,6 +78,7 @@ function buildConfigFromModalControls(): CleaningConfig {
+   readCheckboxesIntoConfig(config);
+   config.table_extraction_strategy = dom.selTableExtraction.value as TableExtractionStrategy;
+   config.pdf_text_source = dom.selPdfTextSource.value as PdfTextSource;
++  config.pdf_ocr_quality = dom.selPdfOcrQuality.value as PdfOcrQuality;
+   config.pdf_embedded_text_strategy = dom.selPdfEmbeddedTextStrategy.value as PdfEmbeddedTextStrategy;
+   config.remove_patterns = [...state.tempRemovePatterns];
+   config.replace_patterns = [...state.tempReplacePatterns];
+@@ -87,6 +89,7 @@ function syncModalControlsFromConfig(config: CleaningConfig): void {
+   syncCheckboxesFromConfig(config);
+   dom.selTableExtraction.value = config.table_extraction_strategy;
+   dom.selPdfTextSource.value = config.pdf_text_source;
++  dom.selPdfOcrQuality.value = config.pdf_ocr_quality;
+   dom.selPdfEmbeddedTextStrategy.value = config.pdf_embedded_text_strategy;
+   syncDraftCustomRemovalsFromConfig(config);
+ }
+@@ -160,6 +163,7 @@ export function syncInitialSettingsControls(): void {
+   syncCheckboxesFromConfig(state.activeCleaningConfig);
+   dom.selTableExtraction.value = state.activeCleaningConfig.table_extraction_strategy;
+   dom.selPdfTextSource.value = state.activeCleaningConfig.pdf_text_source;
++  dom.selPdfOcrQuality.value = state.activeCleaningConfig.pdf_ocr_quality;
+   dom.selPdfEmbeddedTextStrategy.value = state.activeCleaningConfig.pdf_embedded_text_strategy;
+ }
+ 
+@@ -187,6 +191,7 @@ export function initSettingsModal(callbacks: SettingsModalCallbacks): void {
+     syncCheckboxesFromConfig(state.activeCleaningConfig);
+     dom.selTableExtraction.value = state.activeCleaningConfig.table_extraction_strategy;
+     dom.selPdfTextSource.value = state.activeCleaningConfig.pdf_text_source;
++    dom.selPdfOcrQuality.value = state.activeCleaningConfig.pdf_ocr_quality;
+     dom.selPdfEmbeddedTextStrategy.value = state.activeCleaningConfig.pdf_embedded_text_strategy;
+     state.tempRemovePatterns = [...state.activeCleaningConfig.remove_patterns];
+     state.tempReplacePatterns = [...state.activeCleaningConfig.replace_patterns];
+diff --git a/apps/desktop/src/word-count.ts b/apps/desktop/src/word-count.ts
+index 26ebdc2..39cfa25 100644
+--- a/apps/desktop/src/word-count.ts
++++ b/apps/desktop/src/word-count.ts
+@@ -1,8 +1,15 @@
+ import { invoke } from "@tauri-apps/api/core";
+ 
+-import { getSummaryAvgWords, getSummaryTotalWords, getSummaryWordLabel } from "./dom";
++import { dom, getSummaryAvgWords, getSummaryTotalWords, getSummaryWordLabel } from "./dom";
+ import { state } from "./state";
+ 
++const OCR_WORD_COUNT_SKIPPED_STATUS = "Token count skipped for OCR mode until OCR text is generated.";
++
++type WordCountBatchResult = {
++  totalWords: number;
++  skippedOcrMode: boolean;
++};
++
+ export async function updateWordCount(): Promise<void> {
+   const myWordCountGeneration = ++state.wordCountGeneration;
+   const myVersion = state.currentCorpusVersion;
+@@ -29,12 +36,23 @@ export async function updateWordCount(): Promise<void> {
+     for (let offset = 0; offset < totalFiles; offset += BATCH_SIZE) {
+       const batchSize = Math.min(BATCH_SIZE, totalFiles - offset);
+       const batchIndices = Array.from({ length: batchSize }, (_, batchIndex) => offset + batchIndex);
+-      const batchWords = await invoke<number>("compute_word_count_command", {
++      const batchResult = await invoke<WordCountBatchResult>("compute_word_count_command", {
+         indices: batchIndices,
+         corpusVersion: myVersion,
+         cleaningConfig: state.activeCleaningConfig
+       });
+-      totalWords += batchWords;
++      if (batchResult.skippedOcrMode) {
++        if (myVersion !== state.currentCorpusVersion || myWordCountGeneration !== state.wordCountGeneration) return;
++        totalWordsEl.textContent = "Unavailable";
++        avgWordsEl.textContent = "Unavailable";
++        if (wordLabelEl) {
++          wordLabelEl.textContent = "Cleaned Token Count";
++          wordLabelEl.title = OCR_WORD_COUNT_SKIPPED_STATUS;
++        }
++        dom.statusBar.textContent = OCR_WORD_COUNT_SKIPPED_STATUS;
++        return;
++      }
++      totalWords += batchResult.totalWords;
+ 
+       const processed = Math.min(offset + BATCH_SIZE, totalFiles);
+       const avgWords = totalWords / processed;
+@@ -46,7 +64,7 @@ export async function updateWordCount(): Promise<void> {
+     if (myVersion !== state.currentCorpusVersion || myWordCountGeneration !== state.wordCountGeneration) return;
+     if (wordLabelEl) {
+       wordLabelEl.textContent = "Cleaned Token Count";
+-      wordLabelEl.title = "Counts whitespace-separated tokens after cleaning. PDF OCR is not used for this count.";
++      wordLabelEl.title = "Counts whitespace-separated tokens after cleaning. OCR-mode PDFs use matching cached OCR text only.";
+     }
+     const avgWords = totalWords / totalFiles;
+     totalWordsEl.textContent = totalWords.toLocaleString();
+diff --git a/crates/corpuswright-core/bindings/CleaningConfig.ts b/crates/corpuswright-core/bindings/CleaningConfig.ts
+index 8a44911..5bab297 100644
+--- a/crates/corpuswright-core/bindings/CleaningConfig.ts
++++ b/crates/corpuswright-core/bindings/CleaningConfig.ts
+@@ -1,5 +1,6 @@
+ // This file was generated by [ts-rs](https://github.com/Aleph-Alpha/ts-rs). Do not edit this file manually.
+ import type { PdfEmbeddedTextStrategy } from "./PdfEmbeddedTextStrategy";
++import type { PdfOcrQuality } from "./PdfOcrQuality";
+ import type { PdfTextSource } from "./PdfTextSource";
+ import type { ReplacementRule } from "./ReplacementRule";
+ import type { TableExtractionStrategy } from "./TableExtractionStrategy";
+@@ -12,6 +13,10 @@ export type CleaningConfig = { join_line_breaks: boolean, normalize_irregular_li
+  * PDF text source used before normal text cleaning is applied.
+  */
+ pdf_text_source: PdfTextSource, 
++/**
++ * OCR render quality used when PDF OCR runs.
++ */
++pdf_ocr_quality: PdfOcrQuality, 
+ /**
+  * PDF extraction strategy.
+  * NOTE: This is an extraction-layer option specifying how raw PDF text
+diff --git a/crates/corpuswright-core/bindings/PdfAuditSuggestedProfile.ts b/crates/corpuswright-core/bindings/PdfAuditSuggestedProfile.ts
+index 43c2dc8..b40c7b3 100644
+--- a/crates/corpuswright-core/bindings/PdfAuditSuggestedProfile.ts
++++ b/crates/corpuswright-core/bindings/PdfAuditSuggestedProfile.ts
+@@ -1,3 +1,3 @@
+ // This file was generated by [ts-rs](https://github.com/Aleph-Alpha/ts-rs). Do not edit this file manually.
+ 
+-export type PdfAuditSuggestedProfile = "standard" | "layout_heavy" | "ocr_rescue";
++export type PdfAuditSuggestedProfile = "standard" | "layout_heavy" | "ocr_rescue" | "force_ocr";
+diff --git a/crates/corpuswright-core/bindings/PdfTextSource.ts b/crates/corpuswright-core/bindings/PdfTextSource.ts
+index 6bef360..39077f6 100644
+--- a/crates/corpuswright-core/bindings/PdfTextSource.ts
++++ b/crates/corpuswright-core/bindings/PdfTextSource.ts
+@@ -1,3 +1,3 @@
+ // This file was generated by [ts-rs](https://github.com/Aleph-Alpha/ts-rs). Do not edit this file manually.
+ 
+-export type PdfTextSource = "EmbeddedText" | "Ocr";
++export type PdfTextSource = "EmbeddedText" | "Ocr" | "ForceOcr";
+diff --git a/crates/corpuswright-core/examples/export_ts.rs b/crates/corpuswright-core/examples/export_ts.rs
+index ebfc5df..1c00ab6 100644
+--- a/crates/corpuswright-core/examples/export_ts.rs
++++ b/crates/corpuswright-core/examples/export_ts.rs
+@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
+ use ts_rs::TS;
+ 
+ use corpuswright_core::clean::{
+-    CleaningConfig, PdfEmbeddedTextStrategy, PdfTextSource, ReplacementRule,
++    CleaningConfig, PdfEmbeddedTextStrategy, PdfOcrQuality, PdfTextSource, ReplacementRule,
+     TableExtractionStrategy,
+ };
+ use corpuswright_core::export::{ExportReport, ExportWarning, ExportWarningKind};
+@@ -77,6 +77,7 @@ fn main() {
+     export_type::<TableExtractionStrategy>(&out_dir, &[], &[]);
+     export_type::<PdfEmbeddedTextStrategy>(&out_dir, &[], &[]);
+     export_type::<PdfTextSource>(&out_dir, &[], &[]);
++    export_type::<PdfOcrQuality>(&out_dir, &[], &[]);
+     export_type::<PdfAuditQuality>(&out_dir, &[], &[]);
+     export_type::<PdfAuditSuggestedProfile>(&out_dir, &[], &[]);
+     export_type::<PdfAuditResult>(
+@@ -112,12 +113,17 @@ fn main() {
+                 name: "PdfTextSource",
+                 file: "PdfTextSource",
+             },
++            TypeImport {
++                name: "PdfOcrQuality",
++                file: "PdfOcrQuality",
++            },
+         ],
+         &[
+             "ReplacementRule",
+             "TableExtractionStrategy",
+             "PdfEmbeddedTextStrategy",
+             "PdfTextSource",
++            "PdfOcrQuality",
+         ],
+     );
+ 
+diff --git a/crates/corpuswright-core/examples/pdf_diagnostic.rs b/crates/corpuswright-core/examples/pdf_diagnostic.rs
+index 4b612ca..6160346 100644
+--- a/crates/corpuswright-core/examples/pdf_diagnostic.rs
++++ b/crates/corpuswright-core/examples/pdf_diagnostic.rs
+@@ -1,18 +1,57 @@
+ use corpuswright_core::pdf::{PdfExtractionOptions, extract_pdf};
+ use corpuswright_core::pdf_ocr;
++use corpuswright_core::{PdfOcrQuality, PdfTextSource};
+ use std::path::PathBuf;
+ 
+ fn main() -> anyhow::Result<()> {
+-    let pdf_path = std::env::args_os()
+-        .nth(1)
+-        .map(PathBuf::from)
+-        .ok_or_else(|| {
+-            anyhow::anyhow!(
+-                "usage: cargo run -p corpuswright-core --example pdf_diagnostic -- <pdf>"
+-            )
+-        })?;
++    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
++    let pdf_path = args.first().map(PathBuf::from).ok_or_else(|| {
++        anyhow::anyhow!(
++            "usage: cargo run -p corpuswright-core --example pdf_diagnostic -- <pdf> [embedded|ocr-rescue|force-ocr] [find phrase] [max chars]"
++        )
++    })?;
++    let mode = args
++        .get(1)
++        .and_then(|value| value.to_str())
++        .unwrap_or("ocr-rescue");
++    let find_phrase = args.get(2).and_then(|value| value.to_str());
++    let max_chars = args
++        .get(3)
++        .and_then(|value| value.to_str())
++        .map(str::parse::<usize>)
++        .transpose()?;
++    let mut options = PdfExtractionOptions::raw_default();
++    match mode {
++        "embedded" => {
++            options.text_source = PdfTextSource::EmbeddedText;
++            options.ocr_quality = PdfOcrQuality::Balanced;
++        }
++        "ocr-rescue" => {
++            options.text_source = PdfTextSource::Ocr;
++            options.ocr_quality = PdfOcrQuality::Balanced;
++        }
++        "force-ocr" => {
++            options.text_source = PdfTextSource::ForceOcr;
++            options.ocr_quality = PdfOcrQuality::HighQuality;
++        }
++        other => {
++            return Err(anyhow::anyhow!(
++                "unknown PDF diagnostic mode: {other}. Use embedded, ocr-rescue, or force-ocr."
++            ));
++        }
++    }
+ 
+     println!("PDF: {}", pdf_path.display());
++    println!(
++        "Mode: {:?}, OCR quality: {:?}",
++        options.text_source, options.ocr_quality
++    );
++    println!(
++        "Max chars: {}",
++        max_chars
++            .map(|limit| limit.to_string())
++            .unwrap_or_else(|| "(none)".to_string())
++    );
+     println!(
+         "Configured OCR resource dir: {}",
+         pdf_ocr::configured_ocr_resource_dir()
+@@ -53,14 +92,7 @@ fn main() -> anyhow::Result<()> {
+     }
+ 
+     let bytes = std::fs::read(&pdf_path)?;
+-    match extract_pdf(
+-        &bytes,
+-        None,
+-        PdfExtractionOptions {
+-            use_ocr: true,
+-            ..PdfExtractionOptions::raw_default()
+-        },
+-    ) {
++    match extract_pdf(&bytes, max_chars, options) {
+         Ok(extracted) => {
+             let backend = extracted
+                 .warnings
+@@ -72,6 +104,13 @@ fn main() -> anyhow::Result<()> {
+             println!("{backend}");
+             println!("Pages: {}", extracted.page_count);
+             println!("Output chars: {}", extracted.text.chars().count());
++            if let Some(find_phrase) = find_phrase {
++                let found = extracted
++                    .text
++                    .to_lowercase()
++                    .contains(&find_phrase.to_lowercase());
++                println!("Find phrase {find_phrase:?}: {found}");
++            }
+             println!("Warnings:");
+             for warning in &extracted.warnings {
+                 println!("  - {warning}");
+diff --git a/crates/corpuswright-core/src/cache.rs b/crates/corpuswright-core/src/cache.rs
+index 752048f..74e76f0 100644
+--- a/crates/corpuswright-core/src/cache.rs
++++ b/crates/corpuswright-core/src/cache.rs
+@@ -19,7 +19,9 @@
+ //!   are evicted until within the limit.
+ //! - Cache is cleared on corpus reload / clear.
+ 
+-use crate::clean::{CleaningConfig, PdfEmbeddedTextStrategy, TableExtractionStrategy};
++use crate::clean::{
++    CleaningConfig, PdfEmbeddedTextStrategy, PdfOcrQuality, PdfTextSource, TableExtractionStrategy,
++};
+ use crate::pdf::PdfExtractionOptions;
+ use crate::scan::{DocumentRecord, DocumentType};
+ use std::collections::{HashMap, VecDeque};
+@@ -36,7 +38,8 @@ pub const DEFAULT_MAX_ENTRY_BYTES: usize = 10 * 1024 * 1024;
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+ pub struct PdfOptionsKey {
+     pub strategy: PdfEmbeddedTextStrategy,
+-    pub use_ocr: bool,
++    pub text_source: PdfTextSource,
++    pub ocr_quality: PdfOcrQuality,
+     pub remove_repeated_headers_footers: bool,
+     pub remove_page_labels: bool,
+     pub remove_symbol_heavy_artifacts: bool,
+@@ -48,7 +51,8 @@ impl From<PdfExtractionOptions> for PdfOptionsKey {
+     fn from(opts: PdfExtractionOptions) -> Self {
+         Self {
+             strategy: opts.strategy,
+-            use_ocr: opts.use_ocr,
++            text_source: opts.text_source,
++            ocr_quality: opts.ocr_quality,
+             remove_repeated_headers_footers: opts.remove_repeated_headers_footers,
+             remove_page_labels: opts.remove_page_labels,
+             remove_symbol_heavy_artifacts: opts.remove_symbol_heavy_artifacts,
+@@ -449,7 +453,8 @@ mod tests {
+         let _cache = ExtractionCache::new();
+ 
+         let opts_a = PdfExtractionOptions {
+-            use_ocr: false,
++            text_source: PdfTextSource::EmbeddedText,
++            ocr_quality: PdfOcrQuality::Balanced,
+             remove_code_like_blocks: false,
+             remove_formula_like_lines: false,
+             remove_page_labels: false,
+@@ -458,13 +463,35 @@ mod tests {
+             strategy: PdfEmbeddedTextStrategy::PdfiumFlat,
+         };
+         let opts_b = PdfExtractionOptions {
+-            use_ocr: true,
++            text_source: PdfTextSource::Ocr,
++            ..opts_a
++        };
++        let opts_c = PdfExtractionOptions {
++            text_source: PdfTextSource::ForceOcr,
++            ..opts_a
++        };
++        let opts_d = PdfExtractionOptions {
++            text_source: PdfTextSource::ForceOcr,
++            ocr_quality: PdfOcrQuality::HighQuality,
+             ..opts_a
+         };
+ 
+         let key_a = ExtractionKey::from_record(&record, Some(opts_a), &CleaningConfig::default());
+         let key_b = ExtractionKey::from_record(&record, Some(opts_b), &CleaningConfig::default());
+-        assert_ne!(key_a, key_b, "PDF options with different OCR should differ");
++        let key_c = ExtractionKey::from_record(&record, Some(opts_c), &CleaningConfig::default());
++        let key_d = ExtractionKey::from_record(&record, Some(opts_d), &CleaningConfig::default());
++        assert_ne!(
++            key_a, key_b,
++            "Embedded text and OCR rescue cache keys should differ"
++        );
++        assert_ne!(
++            key_b, key_c,
++            "OCR rescue and force OCR cache keys should differ"
++        );
++        assert_ne!(
++            key_c, key_d,
++            "OCR quality presets should be part of the cache key"
++        );
+ 
+         let key_a2 = ExtractionKey::from_record(&record, Some(opts_a), &CleaningConfig::default());
+         assert_eq!(key_a, key_a2, "Same PDF options should match");
+@@ -546,10 +573,7 @@ mod tests {
+         std::fs::write(&path, b"%PDF-1.4").unwrap();
+ 
+         let cache = ExtractionCache::new();
+-        let pdf_opts = PdfExtractionOptions {
+-            use_ocr: false,
+-            ..PdfExtractionOptions::raw_default()
+-        };
++        let pdf_opts = PdfExtractionOptions::raw_default();
+ 
+         let result = cache.get_or_extract(&record, Some(pdf_opts), &CleaningConfig::default());
+         // The minimal PDF may fail before cache metadata exists; either outcome is acceptable here.
+diff --git a/crates/corpuswright-core/src/clean.rs b/crates/corpuswright-core/src/clean.rs
+index 447eac0..d41b23c 100644
+--- a/crates/corpuswright-core/src/clean.rs
++++ b/crates/corpuswright-core/src/clean.rs
+@@ -43,6 +43,16 @@ pub enum PdfTextSource {
+     #[default]
+     EmbeddedText,
+     Ocr,
++    ForceOcr,
++}
++
++#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
++#[ts(export)]
++pub enum PdfOcrQuality {
++    Fast,
++    #[default]
++    Balanced,
++    HighQuality,
+ }
+ 
+ /// Configuration options for text cleaning operations.
+@@ -74,6 +84,9 @@ pub struct CleaningConfig {
+     /// PDF text source used before normal text cleaning is applied.
+     #[serde(default)]
+     pub pdf_text_source: PdfTextSource,
++    /// OCR render quality used when PDF OCR runs.
++    #[serde(default)]
++    pub pdf_ocr_quality: PdfOcrQuality,
+     /// PDF extraction strategy.
+     /// NOTE: This is an extraction-layer option specifying how raw PDF text
+     /// is reconstructed from the character stream, NOT a text-cleaning/sanitization transformation.
+@@ -480,6 +493,7 @@ mod tests {
+             TableExtractionStrategy::TabSeparated
+         );
+         assert_eq!(config.pdf_text_source, PdfTextSource::EmbeddedText);
++        assert_eq!(config.pdf_ocr_quality, PdfOcrQuality::Balanced);
+         assert_eq!(
+             config.pdf_embedded_text_strategy,
+             PdfEmbeddedTextStrategy::PdfiumFlat
+@@ -495,6 +509,15 @@ mod tests {
+         assert_eq!(config.pdf_text_source, PdfTextSource::EmbeddedText);
+     }
+ 
++    #[test]
++    fn test_cleaning_config_deserializes_missing_pdf_ocr_quality() {
++        let mut value = serde_json::to_value(CleaningConfig::default()).unwrap();
++        value.as_object_mut().unwrap().remove("pdf_ocr_quality");
++
++        let config: CleaningConfig = serde_json::from_value(value).unwrap();
++        assert_eq!(config.pdf_ocr_quality, PdfOcrQuality::Balanced);
++    }
++
+     #[test]
+     fn tests_default_processing_leaves_simple_text_unchanged() {
+         let input = "  Some Text with Mixed CASE, \n  newlines, and áéíóú diacritics.  \n";
+diff --git a/crates/corpuswright-core/src/export.rs b/crates/corpuswright-core/src/export.rs
+index 5abe598..00980c3 100644
+--- a/crates/corpuswright-core/src/export.rs
++++ b/crates/corpuswright-core/src/export.rs
+@@ -149,6 +149,7 @@ pub fn export_corpus(
+                 DocumentType::Docx => Some("docx_zip_wordprocessingml".to_string()),
+                 DocumentType::Pdf => match cleaning_config.pdf_text_source {
+                     PdfTextSource::Ocr => Some("pdf_ocr_rescue".to_string()),
++                    PdfTextSource::ForceOcr => Some("pdf_force_ocr".to_string()),
+                     PdfTextSource::EmbeddedText => match cleaning_config.pdf_embedded_text_strategy
+                     {
+                         PdfEmbeddedTextStrategy::PdfiumFlat => Some("pdfium_flat".to_string()),
+diff --git a/crates/corpuswright-core/src/lib.rs b/crates/corpuswright-core/src/lib.rs
+index eea0525..aabcce1 100644
+--- a/crates/corpuswright-core/src/lib.rs
++++ b/crates/corpuswright-core/src/lib.rs
+@@ -34,7 +34,7 @@ pub mod scan;
+ pub mod search;
+ pub mod word_count;
+ 
+-pub use clean::{CleaningConfig, PdfTextSource, ReplacementRule, clean_text};
++pub use clean::{CleaningConfig, PdfOcrQuality, PdfTextSource, ReplacementRule, clean_text};
+ pub use export::{
+     ExportError, ExportOptions, ExportReport, ExportWarning, ExportWarningKind, ExportedFileRecord,
+     export_corpus,
+diff --git a/crates/corpuswright-core/src/pdf.rs b/crates/corpuswright-core/src/pdf.rs
+index b123217..0482566 100644
+--- a/crates/corpuswright-core/src/pdf.rs
++++ b/crates/corpuswright-core/src/pdf.rs
+@@ -1,15 +1,19 @@
+-use crate::clean::{PdfEmbeddedTextStrategy, PdfTextSource};
++use crate::clean::{PdfEmbeddedTextStrategy, PdfOcrQuality, PdfTextSource};
+ use lopdf::Document;
+ use regex::Regex;
+ use std::sync::{LazyLock, Mutex};
+ 
+ pub static PDFIUM_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+ 
++const PDF_OCR_PREVIEW_CHAR_CAP: usize = 5_000;
++const PDF_OCR_PREVIEW_PAGE_CAP: usize = 3;
++
+ /// Named options for PDF extraction.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+ pub struct PdfExtractionOptions {
+     pub strategy: PdfEmbeddedTextStrategy,
+-    pub use_ocr: bool,
++    pub text_source: PdfTextSource,
++    pub ocr_quality: PdfOcrQuality,
+     pub remove_repeated_headers_footers: bool,
+     pub remove_page_labels: bool,
+     pub remove_symbol_heavy_artifacts: bool,
+@@ -22,7 +26,8 @@ impl PdfExtractionOptions {
+     pub fn from_cleaning_config(config: &crate::clean::CleaningConfig) -> Self {
+         Self {
+             strategy: config.pdf_embedded_text_strategy,
+-            use_ocr: matches!(config.pdf_text_source, PdfTextSource::Ocr),
++            text_source: config.pdf_text_source,
++            ocr_quality: config.pdf_ocr_quality,
+             remove_repeated_headers_footers: config.remove_repeated_pdf_headers_footers,
+             remove_page_labels: config.remove_pdf_page_labels,
+             remove_symbol_heavy_artifacts: config.remove_pdf_symbol_heavy_artifacts,
+@@ -35,7 +40,8 @@ impl PdfExtractionOptions {
+     pub fn raw_default() -> Self {
+         Self {
+             strategy: PdfEmbeddedTextStrategy::PdfiumFlat,
+-            use_ocr: false,
++            text_source: PdfTextSource::EmbeddedText,
++            ocr_quality: PdfOcrQuality::Balanced,
+             remove_repeated_headers_footers: false,
+             remove_page_labels: false,
+             remove_symbol_heavy_artifacts: false,
+@@ -45,6 +51,45 @@ impl PdfExtractionOptions {
+     }
+ }
+ 
++fn capped_ocr_chars_for_preview(max_chars: Option<usize>) -> Option<usize> {
++    max_chars.map(|limit| limit.min(PDF_OCR_PREVIEW_CHAR_CAP))
++}
++
++fn warn_about_ocr_preview_cap(warnings: &mut Vec<String>, max_chars: Option<usize>) {
++    if let Some(cap) = capped_ocr_chars_for_preview(max_chars) {
++        warnings.push(format!(
++            "OCR preview was capped to at most {} characters and {} pages. Search and export may process more text and take much longer.",
++            cap, PDF_OCR_PREVIEW_PAGE_CAP
++        ));
++    }
++}
++
++fn run_pdf_ocr(
++    bytes: &[u8],
++    max_chars: Option<usize>,
++    ocr_quality: PdfOcrQuality,
++    warnings: &mut Vec<String>,
++    success_warning: &str,
++) -> Option<String> {
++    warn_about_ocr_preview_cap(warnings, max_chars);
++    match crate::pdf_ocr::extract_text_via_ocr(
++        bytes,
++        capped_ocr_chars_for_preview(max_chars),
++        max_chars.map(|_| PDF_OCR_PREVIEW_PAGE_CAP),
++        ocr_quality,
++    ) {
++        Ok(ocr) => {
++            warnings.extend(ocr.warnings);
++            warnings.push(success_warning.to_string());
++            Some(ocr.text)
++        }
++        Err(e) => {
++            warnings.push(format!("Experimental OCR failed: {}", e));
++            None
++        }
++    }
++}
++
+ pub(crate) fn is_graphical_marker(c: char) -> bool {
+     matches!(
+         c,
+@@ -450,7 +495,8 @@ pub fn extract_pdf(
+ ) -> Result<ExtractedPdf, PdfExtractionError> {
+     let PdfExtractionOptions {
+         strategy,
+-        use_ocr,
++        text_source,
++        ocr_quality,
+         remove_repeated_headers_footers,
+         remove_page_labels,
+         remove_symbol_heavy_artifacts,
+@@ -487,6 +533,17 @@ pub fn extract_pdf(
+                 "PDFium native library not available; OCR fallback is disabled and PDF extraction may be limited. ({})",
+                 pdfium_error
+             ));
++            if text_source == PdfTextSource::ForceOcr {
++                warnings.push(
++                    "Force OCR was selected, but PDFium is unavailable; embedded-text fallback was not used for this OCR mode."
++                        .to_string(),
++                );
++                return Ok(ExtractedPdf {
++                    text: String::new(),
++                    warnings,
++                    page_count: doc.get_pages().len(),
++                });
++            }
+             let page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
+             return extract_with_lopdf_fallback(
+                 &doc,
+@@ -519,6 +576,26 @@ pub fn extract_pdf(
+     warnings.push("PDF reading order is not guaranteed. Formatting may be lost.".to_string());
+     warnings.push("PDF backend: PDFium.".to_string());
+ 
++    if text_source == PdfTextSource::ForceOcr {
++        let text = run_pdf_ocr(
++            bytes,
++            max_chars,
++            ocr_quality,
++            &mut warnings,
++            "Used experimental Force OCR to extract PDF text from rendered pages.",
++        )
++        .unwrap_or_default();
++        if text.trim().is_empty() {
++            warnings.push("Force OCR completed but produced no text.".to_string());
++        }
++
++        return Ok(ExtractedPdf {
++            text,
++            warnings,
++            page_count,
++        });
++    }
++
+     let mut all_text = String::new();
+     let mut has_any_text = false;
+ 
+@@ -941,21 +1018,20 @@ pub fn extract_pdf(
+         warnings.push("PDF embedded-text extraction appears low quality. The output contains unusually many symbols or non-word fragments.".to_string());
+     }
+ 
+-    if use_ocr && (!has_any_text || is_poor_quality) {
+-        // Cap OCR fallback length for large previews to prevent UI freezing.
+-        // Export passes None, so it remains uncapped.
+-        let ocr_max_chars = max_chars.map(|limit| if limit > 2000 { 1000 } else { limit });
+-
+-        match crate::pdf_ocr::extract_text_via_ocr(bytes, ocr_max_chars) {
+-            Ok(ocr_text) => {
+-                all_text = ocr_text;
+-                warnings
+-                    .push("Used experimental OCR to extract text from scanned pages.".to_string());
+-            }
+-            Err(e) => {
+-                warnings.push(format!("Experimental OCR failed: {}", e));
+-            }
++    if text_source == PdfTextSource::Ocr
++        && (!has_any_text || is_poor_quality)
++        && let Some(ocr_text) = run_pdf_ocr(
++            bytes,
++            max_chars,
++            ocr_quality,
++            &mut warnings,
++            "Used experimental OCR rescue to extract text from scanned pages.",
++        )
++    {
++        if ocr_text.trim().is_empty() {
++            warnings.push("OCR rescue completed but produced no text.".to_string());
+         }
++        all_text = ocr_text;
+     }
+ 
+     Ok(ExtractedPdf {
+@@ -1301,7 +1377,7 @@ fn classify_pdf_line(line: &str) -> PdfLineKind {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::clean::{CleaningConfig, PdfEmbeddedTextStrategy, PdfTextSource};
++    use crate::clean::{CleaningConfig, PdfEmbeddedTextStrategy, PdfOcrQuality, PdfTextSource};
+     use lopdf::content::{Content, Operation};
+     use lopdf::{Document, Object, Stream, StringFormat, dictionary};
+ 
+@@ -1309,6 +1385,7 @@ mod tests {
+     fn test_pdf_extraction_options_from_cleaning_config() {
+         let config = CleaningConfig {
+             pdf_text_source: PdfTextSource::Ocr,
++            pdf_ocr_quality: PdfOcrQuality::HighQuality,
+             pdf_embedded_text_strategy: PdfEmbeddedTextStrategy::PdfiumVisualSingleColumn,
+             remove_repeated_pdf_headers_footers: true,
+             remove_pdf_page_labels: true,
+@@ -1322,7 +1399,8 @@ mod tests {
+             options.strategy,
+             PdfEmbeddedTextStrategy::PdfiumVisualSingleColumn
+         );
+-        assert!(options.use_ocr);
++        assert_eq!(options.text_source, PdfTextSource::Ocr);
++        assert_eq!(options.ocr_quality, PdfOcrQuality::HighQuality);
+         assert!(options.remove_repeated_headers_footers);
+         assert!(options.remove_page_labels);
+         assert!(!options.remove_symbol_heavy_artifacts);
+@@ -1333,14 +1411,16 @@ mod tests {
+     #[test]
+     fn test_pdf_extraction_options_default_to_embedded_text() {
+         let options = PdfExtractionOptions::from_cleaning_config(&CleaningConfig::default());
+-        assert!(!options.use_ocr);
++        assert_eq!(options.text_source, PdfTextSource::EmbeddedText);
++        assert_eq!(options.ocr_quality, PdfOcrQuality::Balanced);
+     }
+ 
+     #[test]
+     fn test_pdf_extraction_options_raw_default() {
+         let options = PdfExtractionOptions::raw_default();
+         assert_eq!(options.strategy, PdfEmbeddedTextStrategy::PdfiumFlat);
+-        assert!(!options.use_ocr);
++        assert_eq!(options.text_source, PdfTextSource::EmbeddedText);
++        assert_eq!(options.ocr_quality, PdfOcrQuality::Balanced);
+         assert!(!options.remove_repeated_headers_footers);
+         assert!(!options.remove_page_labels);
+         assert!(!options.remove_symbol_heavy_artifacts);
+diff --git a/crates/corpuswright-core/src/pdf_audit.rs b/crates/corpuswright-core/src/pdf_audit.rs
+index 9ebd144..e2317c8 100644
+--- a/crates/corpuswright-core/src/pdf_audit.rs
++++ b/crates/corpuswright-core/src/pdf_audit.rs
+@@ -26,6 +26,7 @@ pub enum PdfAuditSuggestedProfile {
+     Standard,
+     LayoutHeavy,
+     OcrRescue,
++    ForceOcr,
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+@@ -113,15 +114,15 @@ fn audit_pdf_file(path: &Path, environment: &PdfAuditEnvironment) -> PdfAuditRes
+ 
+     match quality {
+         PdfAuditQuality::Empty => warnings.push(
+-            "This PDF appears to contain little or no embedded text. OCR rescue is recommended."
++            "This PDF appears to contain little or no embedded text. Force OCR is recommended."
+                 .to_string(),
+         ),
+         PdfAuditQuality::Poor => warnings.push(
+-            "Embedded text was found, but extraction quality looks poor. OCR rescue is recommended and preview should be inspected."
++            "Embedded text was found, but extraction quality looks very poor. Force OCR is recommended and preview should be inspected."
+                 .to_string(),
+         ),
+         PdfAuditQuality::Suspicious => warnings.push(
+-            "Embedded text was found, but extraction quality looks suspicious. Try Layout-heavy PDF or OCR rescue and inspect the preview."
++            "Embedded text was found, but extraction quality looks suspicious. Try OCR rescue or Layout-heavy PDF and inspect the preview."
+                 .to_string(),
+         ),
+         PdfAuditQuality::Good | PdfAuditQuality::Unknown => {}
+@@ -129,16 +130,18 @@ fn audit_pdf_file(path: &Path, environment: &PdfAuditEnvironment) -> PdfAuditRes
+ 
+     if !environment.ocr_model_resources_available {
+         warnings.push(
+-            "OCR model files are unavailable; OCR rescue may not run until the OCR resources are installed."
++            "OCR model files are unavailable; OCR profiles may not run until the OCR resources are installed."
+                 .to_string(),
+         );
+     }
+ 
+-    if suggested_profile == PdfAuditSuggestedProfile::OcrRescue
+-        && environment.ocr_model_resources_available
++    if matches!(
++        suggested_profile,
++        PdfAuditSuggestedProfile::OcrRescue | PdfAuditSuggestedProfile::ForceOcr
++    ) && environment.ocr_model_resources_available
+     {
+         warnings.push(
+-            "OCR rescue is suggested, but this audit only checks OCR model files and does not verify full OCR usability."
++            "An OCR profile is suggested, but this audit only checks OCR model files and does not verify full OCR usability."
+                 .to_string(),
+         );
+     }
+@@ -308,13 +311,13 @@ fn suggested_profile_for_quality(
+ ) -> PdfAuditSuggestedProfile {
+     match quality {
+         PdfAuditQuality::Good => PdfAuditSuggestedProfile::Standard,
+-        PdfAuditQuality::Suspicious => PdfAuditSuggestedProfile::LayoutHeavy,
+-        PdfAuditQuality::Poor | PdfAuditQuality::Empty => PdfAuditSuggestedProfile::OcrRescue,
++        PdfAuditQuality::Suspicious => PdfAuditSuggestedProfile::OcrRescue,
++        PdfAuditQuality::Poor | PdfAuditQuality::Empty => PdfAuditSuggestedProfile::ForceOcr,
+         PdfAuditQuality::Unknown => {
+             if embedded_text_chars == 0 {
+-                PdfAuditSuggestedProfile::OcrRescue
++                PdfAuditSuggestedProfile::ForceOcr
+             } else {
+-                PdfAuditSuggestedProfile::LayoutHeavy
++                PdfAuditSuggestedProfile::OcrRescue
+             }
+         }
+     }
+@@ -368,15 +371,15 @@ mod tests {
+         );
+         assert_eq!(
+             suggested_profile_for_quality(&PdfAuditQuality::Suspicious, 100),
+-            PdfAuditSuggestedProfile::LayoutHeavy
++            PdfAuditSuggestedProfile::OcrRescue
+         );
+         assert_eq!(
+             suggested_profile_for_quality(&PdfAuditQuality::Empty, 0),
+-            PdfAuditSuggestedProfile::OcrRescue
++            PdfAuditSuggestedProfile::ForceOcr
+         );
+         assert_eq!(
+             suggested_profile_for_quality(&PdfAuditQuality::Poor, 100),
+-            PdfAuditSuggestedProfile::OcrRescue
++            PdfAuditSuggestedProfile::ForceOcr
+         );
+     }
+ 
+diff --git a/crates/corpuswright-core/src/pdf_ocr.rs b/crates/corpuswright-core/src/pdf_ocr.rs
+index 16390d4..3fa24d5 100644
+--- a/crates/corpuswright-core/src/pdf_ocr.rs
++++ b/crates/corpuswright-core/src/pdf_ocr.rs
+@@ -1,3 +1,4 @@
++use crate::clean::PdfOcrQuality;
+ use ocrs::{OcrEngine, OcrEngineParams};
+ use pdfium_render::prelude::*;
+ use rten::Model;
+@@ -8,6 +9,88 @@ static OCR_ENGINE: OnceLock<OcrEngine> = OnceLock::new();
+ static PDFIUM_LIBRARY: OnceLock<Pdfium> = OnceLock::new();
+ static OCR_RESOURCE_DIR: LazyLock<RwLock<Option<PathBuf>>> = LazyLock::new(|| RwLock::new(None));
+ 
++#[derive(Debug, Clone)]
++pub struct OcrExtraction {
++    pub text: String,
++    pub warnings: Vec<String>,
++}
++
++#[derive(Clone, Copy)]
++struct OcrRenderPreset {
++    dpi: f64,
++    max_dimension: i32,
++    max_pixels: u64,
++}
++
++fn render_preset(quality: PdfOcrQuality) -> OcrRenderPreset {
++    match quality {
++        PdfOcrQuality::Fast => OcrRenderPreset {
++            dpi: 150.0,
++            max_dimension: 2_400,
++            max_pixels: 6_000_000,
++        },
++        PdfOcrQuality::Balanced => OcrRenderPreset {
++            dpi: 200.0,
++            max_dimension: 3_200,
++            max_pixels: 10_000_000,
++        },
++        PdfOcrQuality::HighQuality => OcrRenderPreset {
++            dpi: 300.0,
++            max_dimension: 4_096,
++            max_pixels: 14_000_000,
++        },
++    }
++}
++
++fn render_config_for_page(
++    page: &PdfPage<'_>,
++    quality: PdfOcrQuality,
++    page_number: usize,
++) -> (PdfRenderConfig, Option<String>) {
++    let preset = render_preset(quality);
++    let page_width_points = f64::from(page.width().value).max(1.0);
++    let page_height_points = f64::from(page.height().value).max(1.0);
++    let desired_width = (page_width_points / 72.0 * preset.dpi).round().max(1.0);
++    let desired_height = (page_height_points / 72.0 * preset.dpi).round().max(1.0);
++
++    let dimension_scale = (f64::from(preset.max_dimension) / desired_width)
++        .min(f64::from(preset.max_dimension) / desired_height)
++        .min(1.0);
++    let desired_pixels = desired_width * desired_height;
++    let pixel_scale = if desired_pixels > preset.max_pixels as f64 {
++        (preset.max_pixels as f64 / desired_pixels).sqrt()
++    } else {
++        1.0
++    };
++    let scale = dimension_scale.min(pixel_scale).min(1.0);
++
++    let target_width = (desired_width * scale)
++        .round()
++        .max(1.0)
++        .min(f64::from(preset.max_dimension)) as i32;
++    let target_height = (desired_height * scale)
++        .round()
++        .max(1.0)
++        .min(f64::from(preset.max_dimension)) as i32;
++
++    let warning = if scale < 0.999 {
++        Some(format!(
++            "OCR render size was clamped on page {} from {}x{} to about {}x{} pixels to limit memory use.",
++            page_number, desired_width as u64, desired_height as u64, target_width, target_height
++        ))
++    } else {
++        None
++    };
++
++    let render_config = PdfRenderConfig::new()
++        .set_target_width(target_width)
++        .set_maximum_width(preset.max_dimension)
++        .set_maximum_height(preset.max_dimension)
++        .set_clear_color(PdfColor::WHITE);
++
++    (render_config, warning)
++}
++
+ /// Overrides the OCR/PDFium resource directory used by core extraction.
+ ///
+ /// UI layers should call this during startup after resolving their packaged
+@@ -210,7 +293,12 @@ fn init_ocr_engine() -> anyhow::Result<&'static OcrEngine> {
+     Ok(OCR_ENGINE.get().unwrap())
+ }
+ 
+-pub fn extract_text_via_ocr(bytes: &[u8], max_chars: Option<usize>) -> anyhow::Result<String> {
++pub fn extract_text_via_ocr(
++    bytes: &[u8],
++    max_chars: Option<usize>,
++    max_pages: Option<usize>,
++    quality: PdfOcrQuality,
++) -> anyhow::Result<OcrExtraction> {
+     let pdfium = init_pdfium()?;
+     let engine = init_ocr_engine()?;
+ 
+@@ -219,13 +307,18 @@ pub fn extract_text_via_ocr(bytes: &[u8], max_chars: Option<usize>) -> anyhow::R
+         pdfium.load_pdf_from_byte_slice(bytes, None)?
+     };
+     let mut all_text = String::new();
++    let mut warnings = Vec::new();
+ 
+     let page_count = {
+         let _lock = crate::pdf::PDFIUM_LOCK.lock().unwrap();
+         document.pages().len() as usize
+     };
+ 
+-    for page_index in 0..page_count {
++    let pages_to_process = max_pages
++        .map(|limit| limit.min(page_count))
++        .unwrap_or(page_count);
++
++    for page_index in 0..pages_to_process {
+         if let Some(limit) = max_chars
+             && all_text.chars().count() >= limit
+         {
+@@ -235,10 +328,11 @@ pub fn extract_text_via_ocr(bytes: &[u8], max_chars: Option<usize>) -> anyhow::R
+         let image = {
+             let _lock = crate::pdf::PDFIUM_LOCK.lock().unwrap();
+             let page = document.pages().get(page_index as i32)?;
+-            // Render to roughly 200 DPI
+-            let render_config = PdfRenderConfig::new()
+-                .set_target_width(1200)
+-                .set_clear_color(PdfColor::WHITE);
++            let (render_config, render_warning) =
++                render_config_for_page(&page, quality, page_index + 1);
++            if let Some(warning) = render_warning {
++                warnings.push(warning);
++            }
+ 
+             let bitmap = page.render_with_config(&render_config)?;
+             bitmap.as_image()?
+@@ -272,7 +366,10 @@ pub fn extract_text_via_ocr(bytes: &[u8], max_chars: Option<usize>) -> anyhow::R
+         }
+     }
+ 
+-    Ok(all_text)
++    Ok(OcrExtraction {
++        text: all_text,
++        warnings,
++    })
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/corpuswright-core/src/preview.rs b/crates/corpuswright-core/src/preview.rs
+index 46babe0..f87099e 100644
+--- a/crates/corpuswright-core/src/preview.rs
++++ b/crates/corpuswright-core/src/preview.rs
+@@ -1,5 +1,5 @@
+ use crate::cache::ExtractionCache;
+-use crate::clean::{CleaningConfig, clean_text};
++use crate::clean::{CleaningConfig, PdfOcrQuality, PdfTextSource, clean_text};
+ use crate::pdf::PdfExtractionOptions;
+ use crate::scan::{DocumentRecord, DocumentType};
+ use rayon::prelude::*;
+@@ -182,7 +182,8 @@ pub fn preview_file(
+         }
+     } else if record.document_type == DocumentType::Pdf {
+         let pdf_options = PdfExtractionOptions {
+-            use_ocr: true,
++            text_source: PdfTextSource::Ocr,
++            ocr_quality: PdfOcrQuality::Balanced,
+             ..PdfExtractionOptions::raw_default()
+         };
+         if let Some(cache) = cache {
+@@ -213,7 +214,8 @@ pub fn preview_file(
+                     &bytes,
+                     Some(options.max_chars_per_file),
+                     PdfExtractionOptions {
+-                        use_ocr: true,
++                        text_source: PdfTextSource::Ocr,
++                        ocr_quality: PdfOcrQuality::Balanced,
+                         ..PdfExtractionOptions::raw_default()
+                     },
+                 ) {
+@@ -256,7 +258,8 @@ pub fn preview_file(
+                 &bytes,
+                 Some(options.max_chars_per_file),
+                 PdfExtractionOptions {
+-                    use_ocr: true,
++                    text_source: PdfTextSource::Ocr,
++                    ocr_quality: PdfOcrQuality::Balanced,
+                     ..PdfExtractionOptions::raw_default()
+                 },
+             ) {
+diff --git a/crates/corpuswright-core/src/repeated_artifacts.rs b/crates/corpuswright-core/src/repeated_artifacts.rs
+index ed3e664..686d45c 100644
+--- a/crates/corpuswright-core/src/repeated_artifacts.rs
++++ b/crates/corpuswright-core/src/repeated_artifacts.rs
+@@ -9,7 +9,7 @@
+ //! - Parallel workers build local maps; merged after per-file processing to avoid global lock contention.
+ 
+ use crate::cache::ExtractionCache;
+-use crate::clean::CleaningConfig;
++use crate::clean::{CleaningConfig, PdfOcrQuality, PdfTextSource};
+ use crate::pdf::PdfExtractionOptions;
+ use crate::scan::{DocumentRecord, DocumentType};
+ use rayon::prelude::*;
+@@ -726,7 +726,8 @@ fn build_repeated_artifact_pdf_options(
+     } else {
+         PdfExtractionOptions {
+             strategy: crate::clean::PdfEmbeddedTextStrategy::PdfiumFlat,
+-            use_ocr: false,
++            text_source: PdfTextSource::EmbeddedText,
++            ocr_quality: PdfOcrQuality::Balanced,
+             remove_repeated_headers_footers: false,
+             remove_page_labels: false,
+             remove_symbol_heavy_artifacts: false,
+diff --git a/crates/corpuswright-core/src/word_count.rs b/crates/corpuswright-core/src/word_count.rs
+index f3d6758..5b60d6e 100644
+--- a/crates/corpuswright-core/src/word_count.rs
++++ b/crates/corpuswright-core/src/word_count.rs
+@@ -3,33 +3,74 @@
+ //! Counts follow the active `CleaningConfig` so the Tauri layer aligns with
+ //! export and preview processing.
+ //!
+-//! OCR is disabled for word counts to keep the operation fast. If export or
+-//! preview enables OCR for PDFs, scanned pages may be undercounted.
++//! OCR modes only use matching cached extraction results. Automatic word counts
++//! skip uncached OCR PDFs instead of counting a different text source.
+ 
+ use crate::cache::ExtractionCache;
+-use crate::clean::{CleaningConfig, clean_text};
++use crate::clean::{CleaningConfig, PdfTextSource, clean_text};
+ use crate::scan::{DocumentRecord, DocumentType};
+ 
++pub const OCR_WORD_COUNT_SKIPPED_STATUS: &str =
++    "Token count skipped for OCR mode until OCR text is generated.";
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct WordCountOutcome {
++    pub count: usize,
++    pub skipped_ocr_mode: bool,
++}
++
++impl WordCountOutcome {
++    fn count(count: usize) -> Self {
++        Self {
++            count,
++            skipped_ocr_mode: false,
++        }
++    }
++
++    fn skipped_ocr_mode() -> Self {
++        Self {
++            count: 0,
++            skipped_ocr_mode: true,
++        }
++    }
++}
++
+ /// Count words in a single document after applying the configured extraction
+ /// and post-extraction cleaning.
+ ///
+-/// I/O and extraction errors yield `0`.
++/// I/O and extraction errors yield a zero count. OCR-mode PDFs return a skipped
++/// result unless a matching extraction is already cached.
+ pub fn count_words_for_record(
+     record: &DocumentRecord,
+     cleaning_config: &CleaningConfig,
+     cache: Option<&ExtractionCache>,
+-) -> usize {
+-    let source_text = if let Some(cache) = cache {
+-        let pdf_options = if record.document_type == DocumentType::Pdf {
+-            Some(crate::pdf::PdfExtractionOptions::from_cleaning_config(
++) -> WordCountOutcome {
++    let pdf_options = if record.document_type == DocumentType::Pdf {
++        Some(crate::pdf::PdfExtractionOptions::from_cleaning_config(
++            cleaning_config,
++        ))
++    } else {
++        None
++    };
++
++    if record.document_type == DocumentType::Pdf
++        && cleaning_config.pdf_text_source != PdfTextSource::EmbeddedText
++    {
++        if let Some(entry) =
++            cache.and_then(|cache| cache.try_get(record, pdf_options, cleaning_config))
++        {
++            return WordCountOutcome::count(count_words_in_processed_text(
++                &entry.extracted_text,
+                 cleaning_config,
+-            ))
+-        } else {
+-            None
+-        };
++            ));
++        }
++        return WordCountOutcome::skipped_ocr_mode();
++    }
++
++    let source_text = if let Some(cache) = cache {
+         match cache.get_or_extract(record, pdf_options, cleaning_config) {
+             Ok(entry) => entry.extracted_text,
+-            Err(_) => return 0,
++            Err(_) => return WordCountOutcome::count(0),
+         }
+     } else {
+         if record.document_type == DocumentType::Docx {
+@@ -38,7 +79,7 @@ pub fn count_words_for_record(
+             {
+                 extracted.text
+             } else {
+-                return 0;
++                return WordCountOutcome::count(0);
+             }
+         } else if record.document_type == DocumentType::Pdf {
+             if let Ok(bytes) = std::fs::read(&record.source_path)
+@@ -50,19 +91,19 @@ pub fn count_words_for_record(
+             {
+                 extracted.text
+             } else {
+-                return 0;
++                return WordCountOutcome::count(0);
+             }
+         } else {
+             // Plain text, HTML, or other textual files
+             if let Ok(bytes) = std::fs::read(&record.source_path) {
+                 String::from_utf8_lossy(&bytes).into_owned()
+             } else {
+-                return 0;
++                return WordCountOutcome::count(0);
+             }
+         }
+     };
+ 
+-    count_words_in_processed_text(&source_text, cleaning_config)
++    WordCountOutcome::count(count_words_in_processed_text(&source_text, cleaning_config))
+ }
+ 
+ /// Counts words after optional HTML extraction and `clean_text`.
+@@ -79,7 +120,7 @@ fn count_words_in_processed_text(raw: &str, cleaning_config: &CleaningConfig) ->
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::clean::{CleaningConfig, ReplacementRule};
++    use crate::clean::{CleaningConfig, PdfTextSource, ReplacementRule};
+     use crate::scan::DocumentRecord;
+     use std::fs;
+     use std::path::PathBuf;
+@@ -106,7 +147,7 @@ mod tests {
+             ..CleaningConfig::default()
+         };
+ 
+-        let count = count_words_for_record(&record, &config, None);
++        let count = count_words_for_record(&record, &config, None).count;
+         assert_eq!(
+             count, 2,
+             "expected 2 words after removing REMOVE, got {count}"
+@@ -119,7 +160,7 @@ mod tests {
+         let record = text_record(dir.path(), "hello REMOVE world");
+ 
+         let config = CleaningConfig::default();
+-        let count = count_words_for_record(&record, &config, None);
++        let count = count_words_for_record(&record, &config, None).count;
+         assert_eq!(
+             count, 3,
+             "expected 3 words with default config, got {count}"
+@@ -135,7 +176,7 @@ mod tests {
+             lowercase: true,
+             ..CleaningConfig::default()
+         };
+-        let count = count_words_for_record(&record, &config, None);
++        let count = count_words_for_record(&record, &config, None).count;
+         assert_eq!(count, 2, "lowercase should not change the word count");
+     }
+ 
+@@ -151,7 +192,7 @@ mod tests {
+             }],
+             ..CleaningConfig::default()
+         };
+-        let count = count_words_for_record(&record, &config, None);
++        let count = count_words_for_record(&record, &config, None).count;
+         assert_eq!(count, 2, "expected 2 words after replacing 'old' with ''");
+     }
+ 
+@@ -164,7 +205,29 @@ mod tests {
+             size_bytes: 0,
+         };
+         let config = CleaningConfig::default();
+-        let count = count_words_for_record(&record, &config, None);
++        let count = count_words_for_record(&record, &config, None).count;
+         assert_eq!(count, 0, "missing file should yield 0");
+     }
++
++    #[test]
++    fn uncached_ocr_pdf_word_count_is_skipped() {
++        let dir = tempdir().unwrap();
++        let path = dir.path().join("scan.pdf");
++        fs::write(&path, b"%PDF-1.4").unwrap();
++        let record = DocumentRecord {
++            source_path: path,
++            relative_path: PathBuf::from("scan.pdf"),
++            document_type: DocumentType::Pdf,
++            size_bytes: 8,
++        };
++        let config = CleaningConfig {
++            pdf_text_source: PdfTextSource::Ocr,
++            ..CleaningConfig::default()
++        };
++
++        let outcome = count_words_for_record(&record, &config, None);
++
++        assert_eq!(outcome.count, 0);
++        assert!(outcome.skipped_ocr_mode);
++    }
+ }
